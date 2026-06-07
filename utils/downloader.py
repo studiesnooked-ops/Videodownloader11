@@ -162,10 +162,56 @@ async def _process(bot, chat_id, session, idx, url, total):
             pass
 
     # ── DOWNLOAD ──
-    success = await _download_one(session, url, raw_file, progress)
+    # Detect m3u8 streams
+if ".m3u8" in url.lower():
+
+    await msg.edit_text(
+        f"🎬 {idx}/{total}\nDetected HLS stream (.m3u8)\nStarting FFmpeg..."
+    )
+
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i", url,
+        "-c", "copy",
+        "-bsf:a", "aac_adtstoasc",
+        str(final_file)
+    ]
+
+    rc = await run_ffmpeg(cmd)
+
+    if rc != 0:
+        await msg.edit_text(
+            f"❌ FFmpeg failed for video {idx}/{total}"
+        )
+        return
+
+else:
+    success = await _download_one(
+        session,
+        url,
+        raw_file,
+        progress
+    )
 
     if not success:
-        await msg.edit_text(f"❌ Failed {idx}/{total}")
+        await msg.edit_text(
+            f"❌ Failed {idx}/{total}"
+        )
+        return
+
+    cmd = get_ffmpeg_cmd(
+        str(raw_file),
+        str(final_file),
+        fast_mode=True
+    )
+
+    rc = await run_ffmpeg(cmd)
+
+    if rc != 0:
+        await msg.edit_text(
+            f"❌ FFmpeg processing failed"
+        )
         return
 
     # ── FFmpeg PROCESSING ──
