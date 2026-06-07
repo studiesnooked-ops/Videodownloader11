@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """
 Telegram Video Extractor Bot (PRO Render Web Service Mode)
-Stable + crash-safe + Step 3 upgraded architecture
+Stable + crash-safe + Step 5.5 queue upgrade integrated
 """
 
 import os
 import sys
 import logging
 import threading
+import asyncio
 from pathlib import Path
 
 from telegram import Update
@@ -33,7 +34,7 @@ from utils.logger import setup_logger
 from utils.queue_manager import QueueManager
 from utils.health_server import run_health_server
 
-# 🔥 OPTIONAL STEP 3 FILE SERVER (safe import)
+# OPTIONAL FILE SERVER
 try:
     from utils.file_server import run_file_server
     FILE_SERVER_ENABLED = True
@@ -56,18 +57,38 @@ def validate_env():
         sys.exit(1)
 
 
-# ── LIFECYCLE ─────────────────────────────────────────────
+# ── LIFECYCLE INIT ───────────────────────────────────────
 async def post_init(application: Application):
-    try:
-        application.bot_data["queue_manager"] = QueueManager(
-            max_workers=MAX_WORKERS,
-            max_user_jobs=2
-        )
-        logger.info("QueueManager started (%d workers)", MAX_WORKERS)
-    except Exception as e:
-        logger.error("QueueManager init failed: %s", e)
+    """
+    This runs once when bot starts.
+    We initialize QueueManager + background cleanup loop here.
+    """
+
+    qm = QueueManager(
+        max_workers=MAX_WORKERS,
+        max_user_jobs=2,
+        job_timeout=3600
+    )
+
+    application.bot_data["queue_manager"] = qm
+
+    logger.info("QueueManager started (%d workers)", MAX_WORKERS)
+
+    # 🔥 CLEANUP LOOP (FIXED VERSION)
+    async def cleanup_loop():
+        while True:
+            try:
+                await asyncio.sleep(300)  # every 5 minutes
+                await qm.cleanup_stuck_jobs()
+                logger.info("Stuck job cleanup executed")
+            except Exception as e:
+                logger.error("Cleanup loop error: %s", e)
+
+    # attach safe task to event loop
+    asyncio.create_task(cleanup_loop())
 
 
+# ── SHUTDOWN ─────────────────────────────────────────────
 async def post_shutdown(application: Application):
     qm = application.bot_data.get("queue_manager")
     if qm:
@@ -92,7 +113,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("status", status_command))
     app.add_handler(CommandHandler("cancel", cancel_command))
 
-    # Files
+    # File uploads
     app.add_handler(MessageHandler(filters.Document.TXT, handle_txt_file))
 
     # Callback buttons
@@ -105,7 +126,6 @@ def build_application() -> Application:
 def main():
     validate_env()
 
-    # Create required folders
     for folder in ("logs", "uploads", "downloads"):
         Path(folder).mkdir(exist_ok=True)
 
@@ -113,7 +133,7 @@ def main():
 
     logger.info("🚀 Bot starting in WEB SERVICE MODE (Render)")
 
-    # ── HEALTH SERVER (REQUIRED FOR RENDER) ──
+    # ── HEALTH SERVER ──
     try:
         threading.Thread(
             target=run_health_server,
@@ -122,12 +142,12 @@ def main():
             name="health-server"
         ).start()
 
-        logger.info("Health server started on port %s", PORT)
+        logger.info("Health server running on port %s", PORT)
 
     except Exception as e:
         logger.error("Health server failed: %s", e)
 
-    # ── FILE SERVER (STEP 3 OPTIONAL UPGRADE) ──
+    # ── OPTIONAL FILE SERVER ──
     if FILE_SERVER_ENABLED:
         try:
             threading.Thread(
@@ -137,7 +157,7 @@ def main():
                 name="file-server"
             ).start()
 
-            logger.info("File server started on port 8000")
+            logger.info("File server running on port 8000")
 
         except Exception as e:
             logger.error("File server failed: %s", e)
