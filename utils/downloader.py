@@ -1,6 +1,6 @@
 """
 Async video downloader with FFmpeg speed optimization.
-Render-safe + 1GB support + no-crash architecture.
+Render-safe + 1GB support + crash-proof pipeline.
 """
 
 import asyncio
@@ -20,16 +20,17 @@ from utils.ffmpeg import get_ffmpeg_cmd, run_ffmpeg
 
 logger = logging.getLogger("bot.downloader")
 
+# ── STORAGE ─────────────────────────────
 DOWNLOAD_DIR = Path("downloads")
 DOWNLOAD_DIR.mkdir(exist_ok=True)
 
-# ── SPEED + LIMITS ─────────────────────────────
-CHUNK_SIZE = 2 * 1024 * 1024          # 2MB FAST MODE
-SEND_SIZE_LIMIT = 50 * 1024 * 1024    # Telegram limit
-MAX_FILE_SIZE = 1024 * 1024 * 1024    # 1GB SUPPORT
+# ── PERFORMANCE SETTINGS ─────────────────
+CHUNK_SIZE = 2 * 1024 * 1024  # 2MB
+SEND_SIZE_LIMIT = 50 * 1024 * 1024  # Telegram limit
+MAX_FILE_SIZE = 1024 * 1024 * 1024  # 1GB
 
-CONNECT_TIMEOUT = 15
-READ_TIMEOUT = 3600   # IMPORTANT for 1GB
+CONNECT_TIMEOUT = 20
+READ_TIMEOUT = 7200  # IMPORTANT for large files
 MAX_RETRIES = 3
 RETRY_DELAY = 3
 
@@ -39,9 +40,9 @@ HEADERS = {
 }
 
 
-# ───────────────────────── FILE NAME ─────────────────────────
+# ───────────────────────── FILE NAME SAFE ─────────────────────────
 
-def _guess_filename(url: str, content_type: str = "") -> str:
+def _guess_filename(url: str) -> str:
     path = unquote(urlparse(url).path)
     name = path.split("/")[-1]
     name = re.sub(r"\?.*", "", name)
@@ -49,7 +50,9 @@ def _guess_filename(url: str, content_type: str = "") -> str:
     if not name or "." not in name:
         name = f"video_{int(time.time())}.mp4"
 
-    return re.sub(r"[^\w.\-]", "_", name)
+    # prevent file overwrite collisions
+    name = re.sub(r"[^\w.\-]", "_", name)
+    return f"{int(time.time())}_{name}"
 
 
 # ───────────────────────── DOWNLOAD CORE ─────────────────────────
@@ -60,10 +63,11 @@ async def _download_one(session, url, dest_path, progress_cb=None):
             async with session.get(url, headers=HEADERS) as resp:
                 resp.raise_for_status()
 
-                # 🔥 BLOCK >1GB FILES EARLY
                 total = int(resp.headers.get("Content-Length", 0))
+
+                # ⚠️ block too large early
                 if total and total > MAX_FILE_SIZE:
-                    logger.warning("File too large (>1GB), skipping")
+                    logger.warning("File >1GB skipped")
                     return False
 
                 done = 0
@@ -93,11 +97,11 @@ async def download_and_send_videos(
     chat_id: int,
     urls: List[str],
     queue_manager: Optional[QueueManager] = None,
-) -> None:
+):
 
     connector = aiohttp.TCPConnector(
-        limit=25,
-        limit_per_host=10,
+        limit=20,
+        limit_per_host=8,
         ttl_dns_cache=300,
         ssl=False
     )
@@ -112,18 +116,16 @@ async def download_and_send_videos(
         timeout=timeout
     ) as session:
 
-        sem = asyncio.Semaphore(2)  # Render-safe
+        sem = asyncio.Semaphore(2)
 
         async def worker(i, url):
             async with sem:
                 await _process(bot, chat_id, session, i, url, len(urls))
 
-        tasks = [
-            asyncio.create_task(worker(i, u))
-            for i, u in enumerate(urls, 1)
-        ]
-
-        await asyncio.gather(*tasks, return_exceptions=True)
+        await asyncio.gather(
+            *[worker(i, u) for i, u in enumerate(urls, 1)],
+            return_exceptions=True
+        )
 
     await bot.send_message(chat_id, "✅ All videos processed successfully.")
 
@@ -159,13 +161,14 @@ async def _process(bot, chat_id, session, idx, url, total):
         except:
             pass
 
+    # ── DOWNLOAD ──
     success = await _download_one(session, url, raw_file, progress)
 
     if not success:
         await msg.edit_text(f"❌ Failed {idx}/{total}")
         return
 
-    # ── FFmpeg PROCESSING ──
+    # ── FFmpeg OPTIMIZATION ──
     try:
         cmd = get_ffmpeg_cmd(
             str(raw_file),
@@ -181,7 +184,7 @@ async def _process(bot, chat_id, session, idx, url, total):
 
     size = final_file.stat().st_size
 
-    # ── OUTPUT LOGIC ──
+    # ── OUTPUT ──
     if size <= SEND_SIZE_LIMIT:
         try:
             with open(final_file, "rb") as f:
@@ -191,6 +194,7 @@ async def _process(bot, chat_id, session, idx, url, total):
                     caption=f"🎬 {filename}"
                 )
             await msg.delete()
+
         except Exception as e:
             await msg.edit_text(f"⚠️ Send error: {e}")
 
@@ -203,9 +207,9 @@ async def _process(bot, chat_id, session, idx, url, total):
             f"🔗 Download:\n{file_url}"
         )
 
-    # ── CLEANUP ──
+    # ── CLEANUP SAFE ──
     try:
         raw_file.unlink(missing_ok=True)
         final_file.unlink(missing_ok=True)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("Cleanup failed: %s", e)
