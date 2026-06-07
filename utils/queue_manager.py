@@ -1,11 +1,12 @@
 """
-Production-grade async queue manager (Render-safe).
-Supports:
-- per-user limits
-- job timeout tracking
-- safe cancellation
-- stuck job recovery
-- concurrency control
+Production-grade async queue manager (Render-safe + 1GB bot support).
+Features:
+- Per-user limits
+- Global concurrency control
+- Job timeout detection
+- Stuck job recovery
+- Safe cancellation
+- Daily stats tracking
 """
 
 import asyncio
@@ -27,8 +28,10 @@ class DownloadJob:
     user_id: int
     urls: List[str]
     chat_id: int
+
     created_at: float = field(default_factory=time.time)
     started_at: Optional[float] = None
+
     cancelled: bool = False
     failed: bool = False
 
@@ -67,20 +70,19 @@ class QueueManager:
             self._completed_today.clear()
             self._last_reset_date = today
 
-    # ───────────────── VALIDATION ─────────────────
+    # ───────────────── USER LIMIT CHECK ─────────────────
 
     def can_accept(self, user_id: int) -> bool:
-        """Check per-user limit before queueing."""
         return self._user_active[user_id] < self.max_user_jobs
 
-    # ───────────────── ACQUIRE ─────────────────
+    # ───────────────── ACQUIRE JOB ─────────────────
 
     async def acquire(self, job: DownloadJob) -> bool:
 
         async with self._lock:
 
             if not self.can_accept(job.user_id):
-                logger.warning("User %s exceeded job limit", job.user_id)
+                logger.warning("User %s exceeded limit", job.user_id)
                 return False
 
             self._queued[job.job_id] = job
@@ -105,7 +107,7 @@ class QueueManager:
 
         return True
 
-    # ───────────────── RELEASE ─────────────────
+    # ───────────────── RELEASE JOB ─────────────────
 
     async def release(self, job: DownloadJob):
 
@@ -121,7 +123,7 @@ class QueueManager:
 
         self._semaphore.release()
 
-    # ───────────────── CANCEL USER ─────────────────
+    # ───────────────── CANCEL USER JOBS ─────────────────
 
     def cancel_user_jobs(self, user_id: int) -> int:
         count = 0
@@ -142,7 +144,7 @@ class QueueManager:
     # ───────────────── STUCK JOB CLEANER ─────────────────
 
     async def cleanup_stuck_jobs(self):
-        """Removes jobs stuck longer than timeout."""
+        """Detect and cancel stuck/long-running jobs."""
         now = time.time()
 
         async with self._lock:
