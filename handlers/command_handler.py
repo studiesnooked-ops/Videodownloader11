@@ -39,12 +39,18 @@ HELP_TEXT = """
 • Supports HTTP and HTTPS links
 
 *Limits:*
-• Max file size: 20 MB
-• Max URLs per file: 500
+• Max file size: 1 GB
+Max URLs per file: 1100
+Supported formats:
+• MP4
+• MKV
+• M3U8 streams
+• PDF notes
+• Max URLs per file: 1100
 • Concurrent downloads per user: 3
 
 *Output:*
-• Bot sends each video file directly in chat (≤50 MB)
+• Bot sends each video file directly in chat (≤800 MB)
 • Larger files: you get a direct download link message
 """
 
