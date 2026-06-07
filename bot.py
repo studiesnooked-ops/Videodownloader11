@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Telegram Video Extractor Bot (PRO Render Web Service Mode)
-Stable + crash-safe + production-ready
+Stable + crash-safe + Step 3 upgraded architecture
 """
 
 import os
@@ -28,9 +28,17 @@ from handlers.command_handler import (
 )
 from handlers.callback_handler import handle_callback
 
+# ── CORE SYSTEM ──────────────────────────────────────────
 from utils.logger import setup_logger
 from utils.queue_manager import QueueManager
 from utils.health_server import run_health_server
+
+# 🔥 OPTIONAL STEP 3 FILE SERVER (safe import)
+try:
+    from utils.file_server import run_file_server
+    FILE_SERVER_ENABLED = True
+except Exception:
+    FILE_SERVER_ENABLED = False
 
 
 # ── CONFIG ───────────────────────────────────────────────
@@ -118,6 +126,21 @@ def main():
 
     except Exception as e:
         logger.error("Health server failed: %s", e)
+
+    # ── FILE SERVER (STEP 3 OPTIONAL UPGRADE) ──
+    if FILE_SERVER_ENABLED:
+        try:
+            threading.Thread(
+                target=run_file_server,
+                args=(8000,),
+                daemon=True,
+                name="file-server"
+            ).start()
+
+            logger.info("File server started on port 8000")
+
+        except Exception as e:
+            logger.error("File server failed: %s", e)
 
     # ── START BOT ──
     try:
