@@ -1,6 +1,6 @@
 """
 Async video downloader with FFmpeg speed optimization.
-Render-safe + 1GB support + crash-proof pipeline.
+Render-safe + 1GB support + cloud upload (S3/R2) + crash-proof pipeline.
 """
 
 import asyncio
@@ -17,6 +17,7 @@ from telegram import Bot
 
 from utils.queue_manager import QueueManager
 from utils.ffmpeg import get_ffmpeg_cmd, run_ffmpeg
+from utils.cloud_storage import upload_to_s3   # ✅ STEP 5.3 ADD
 
 logger = logging.getLogger("bot.downloader")
 
@@ -24,13 +25,13 @@ logger = logging.getLogger("bot.downloader")
 DOWNLOAD_DIR = Path("downloads")
 DOWNLOAD_DIR.mkdir(exist_ok=True)
 
-# ── PERFORMANCE SETTINGS ─────────────────
-CHUNK_SIZE = 2 * 1024 * 1024  # 2MB
-SEND_SIZE_LIMIT = 50 * 1024 * 1024  # Telegram limit
-MAX_FILE_SIZE = 1024 * 1024 * 1024  # 1GB
+# ── SETTINGS ─────────────────────────────
+CHUNK_SIZE = 2 * 1024 * 1024
+SEND_SIZE_LIMIT = 50 * 1024 * 1024
+MAX_FILE_SIZE = 1024 * 1024 * 1024
 
 CONNECT_TIMEOUT = 20
-READ_TIMEOUT = 7200  # IMPORTANT for large files
+READ_TIMEOUT = 7200
 MAX_RETRIES = 3
 RETRY_DELAY = 3
 
@@ -40,7 +41,7 @@ HEADERS = {
 }
 
 
-# ───────────────────────── FILE NAME SAFE ─────────────────────────
+# ───────────────────────── FILE NAME ─────────────────────────
 
 def _guess_filename(url: str) -> str:
     path = unquote(urlparse(url).path)
@@ -50,7 +51,6 @@ def _guess_filename(url: str) -> str:
     if not name or "." not in name:
         name = f"video_{int(time.time())}.mp4"
 
-    # prevent file overwrite collisions
     name = re.sub(r"[^\w.\-]", "_", name)
     return f"{int(time.time())}_{name}"
 
@@ -65,7 +65,7 @@ async def _download_one(session, url, dest_path, progress_cb=None):
 
                 total = int(resp.headers.get("Content-Length", 0))
 
-                # ⚠️ block too large early
+                # block huge files early
                 if total and total > MAX_FILE_SIZE:
                     logger.warning("File >1GB skipped")
                     return False
@@ -168,7 +168,7 @@ async def _process(bot, chat_id, session, idx, url, total):
         await msg.edit_text(f"❌ Failed {idx}/{total}")
         return
 
-    # ── FFmpeg OPTIMIZATION ──
+    # ── FFmpeg PROCESSING ──
     try:
         cmd = get_ffmpeg_cmd(
             str(raw_file),
@@ -184,7 +184,7 @@ async def _process(bot, chat_id, session, idx, url, total):
 
     size = final_file.stat().st_size
 
-    # ── OUTPUT ──
+    # ── OUTPUT LOGIC ──
     if size <= SEND_SIZE_LIMIT:
         try:
             with open(final_file, "rb") as f:
@@ -199,15 +199,27 @@ async def _process(bot, chat_id, session, idx, url, total):
             await msg.edit_text(f"⚠️ Send error: {e}")
 
     else:
-        file_url = f"{os.environ.get('RENDER_EXTERNAL_URL')}/file/{filename}"
+        # ── STEP 5.3 CLOUD UPLOAD ──
+        try:
+            file_url = await upload_to_s3(str(final_file), filename)
 
-        await msg.edit_text(
-            "📦 File too large for Telegram\n\n"
-            f"Size: {size/1024/1024:.2f} MB\n"
-            f"🔗 Download:\n{file_url}"
-        )
+            if not file_url:
+                raise Exception("Upload failed")
 
-    # ── CLEANUP SAFE ──
+            await msg.edit_text(
+                "📦 File too large for Telegram\n\n"
+                f"Size: {size/1024/1024:.2f} MB\n"
+                f"☁️ Download link:\n{file_url}"
+            )
+
+        except Exception as e:
+            logger.error("Cloud upload error: %s", e)
+            await msg.edit_text(
+                "❌ File too large AND upload failed\n"
+                f"Size: {size/1024/1024:.2f} MB"
+            )
+
+    # ── CLEANUP ──
     try:
         raw_file.unlink(missing_ok=True)
         final_file.unlink(missing_ok=True)
