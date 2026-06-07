@@ -23,7 +23,7 @@ logger = logging.getLogger("bot.downloader")
 
 DOWNLOAD_DIR = Path("downloads")
 
-CHUNK_SIZE = 512 * 1024
+CHUNK_SIZE = 2 * 512 * 1024 # 2MB FAST MODE
 SEND_SIZE_LIMIT = 50 * 1024 * 1024
 
 CONNECT_TIMEOUT = 15
@@ -95,9 +95,14 @@ async def download_and_send_videos(
 
     DOWNLOAD_DIR.mkdir(exist_ok=True)
 
-    connector = aiohttp.TCPConnector(limit=6, ssl=False)
+    connector = aiohttp.TCPConnector(
+    limit=25,
+    limit_per_host=10,
+    ttl_dns_cache=300,
+    ssl=False
+)
 
-    async with aiohttp.ClientSession(connector=connector) as session:
+async with aiohttp.ClientSession(connector=connector) as session:
 
         sem = asyncio.Semaphore(2)  # Render-safe limit
 
