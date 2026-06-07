@@ -1,7 +1,6 @@
 """
 Async video downloader with FFmpeg speed optimization.
-Downloads videos, processes them (FFmpeg), and sends to Telegram.
-Render-optimized version.
+Render-safe + 1GB support + no-crash architecture.
 """
 
 import asyncio
@@ -22,22 +21,20 @@ from utils.ffmpeg import get_ffmpeg_cmd, run_ffmpeg
 logger = logging.getLogger("bot.downloader")
 
 DOWNLOAD_DIR = Path("downloads")
+DOWNLOAD_DIR.mkdir(exist_ok=True)
 
-CHUNK_SIZE = 2 * 512 * 1024 # 2MB FAST MODE
-SEND_SIZE_LIMIT = 50 * 1024 * 1024
+# ── SPEED + LIMITS ─────────────────────────────
+CHUNK_SIZE = 2 * 1024 * 1024          # 2MB FAST MODE
+SEND_SIZE_LIMIT = 50 * 1024 * 1024    # Telegram limit
+MAX_FILE_SIZE = 1024 * 1024 * 1024    # 1GB SUPPORT
 
 CONNECT_TIMEOUT = 15
-READ_TIMEOUT = 120
-
+READ_TIMEOUT = 3600   # IMPORTANT for 1GB
 MAX_RETRIES = 3
 RETRY_DELAY = 3
 
 HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/120.0.0.0 Safari/537.36"
-    ),
+    "User-Agent": "Mozilla/5.0",
     "Accept": "*/*",
 }
 
@@ -55,7 +52,7 @@ def _guess_filename(url: str, content_type: str = "") -> str:
     return re.sub(r"[^\w.\-]", "_", name)
 
 
-# ───────────────────────── DOWNLOAD ─────────────────────────
+# ───────────────────────── DOWNLOAD CORE ─────────────────────────
 
 async def _download_one(session, url, dest_path, progress_cb=None):
     for attempt in range(1, MAX_RETRIES + 1):
@@ -63,7 +60,12 @@ async def _download_one(session, url, dest_path, progress_cb=None):
             async with session.get(url, headers=HEADERS) as resp:
                 resp.raise_for_status()
 
+                # 🔥 BLOCK >1GB FILES EARLY
                 total = int(resp.headers.get("Content-Length", 0))
+                if total and total > MAX_FILE_SIZE:
+                    logger.warning("File too large (>1GB), skipping")
+                    return False
+
                 done = 0
 
                 with open(dest_path, "wb") as f:
@@ -93,18 +95,24 @@ async def download_and_send_videos(
     queue_manager: Optional[QueueManager] = None,
 ) -> None:
 
-    DOWNLOAD_DIR.mkdir(exist_ok=True)
-
     connector = aiohttp.TCPConnector(
-    limit=25,
-    limit_per_host=10,
-    ttl_dns_cache=300,
-    ssl=False
-)
+        limit=25,
+        limit_per_host=10,
+        ttl_dns_cache=300,
+        ssl=False
+    )
 
-async with aiohttp.ClientSession(connector=connector) as session:
+    timeout = aiohttp.ClientTimeout(
+        connect=CONNECT_TIMEOUT,
+        total=READ_TIMEOUT
+    )
 
-        sem = asyncio.Semaphore(2)  # Render-safe limit
+    async with aiohttp.ClientSession(
+        connector=connector,
+        timeout=timeout
+    ) as session:
+
+        sem = asyncio.Semaphore(2)  # Render-safe
 
         async def worker(i, url):
             async with sem:
@@ -157,7 +165,7 @@ async def _process(bot, chat_id, session, idx, url, total):
         await msg.edit_text(f"❌ Failed {idx}/{total}")
         return
 
-    # ── FFmpeg SPEED OPTIMIZATION STEP ──
+    # ── FFmpeg PROCESSING ──
     try:
         cmd = get_ffmpeg_cmd(
             str(raw_file),
@@ -173,7 +181,7 @@ async def _process(bot, chat_id, session, idx, url, total):
 
     size = final_file.stat().st_size
 
-    # ── SEND VIDEO ──
+    # ── OUTPUT LOGIC ──
     if size <= SEND_SIZE_LIMIT:
         try:
             with open(final_file, "rb") as f:
@@ -185,12 +193,19 @@ async def _process(bot, chat_id, session, idx, url, total):
             await msg.delete()
         except Exception as e:
             await msg.edit_text(f"⚠️ Send error: {e}")
-    else:
-        await msg.edit_text("📦 File too large for Telegram")
 
-    # cleanup
+    else:
+        file_url = f"{os.environ.get('RENDER_EXTERNAL_URL')}/file/{filename}"
+
+        await msg.edit_text(
+            "📦 File too large for Telegram\n\n"
+            f"Size: {size/1024/1024:.2f} MB\n"
+            f"🔗 Download:\n{file_url}"
+        )
+
+    # ── CLEANUP ──
     try:
         raw_file.unlink(missing_ok=True)
         final_file.unlink(missing_ok=True)
-    except:
+    except Exception:
         pass
