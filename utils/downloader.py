@@ -236,13 +236,21 @@ size = final_file.stat().st_size
 
     # ── OUTPUT LOGIC ──
     if size <= SEND_SIZE_LIMIT:
-        try:
-            with open(final_file, "rb") as f:
-                await bot.send_video(
-                    chat_id,
-                    video=f,
-                    caption=f"🎬 {filename}"
-                )
+    try:
+        with open(final_file, "rb") as f:
+            await bot.send_document(
+                chat_id=chat_id,
+                document=f,
+                filename=filename,
+                caption=f"🎬 {filename}"
+            )
+
+        await msg.delete()
+
+    except Exception as e:
+        await msg.edit_text(
+            f"⚠️ Send error: {e}"
+        )
             await msg.delete()
 
         except Exception as e:
