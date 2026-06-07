@@ -185,7 +185,8 @@ cmd = get_ffmpeg_cmd(
         await msg.edit_text(f"⚠️ FFmpeg error: {e}")
         return
 
-    size = final_file.stat().st_size
+    final_file = Path(output_name)
+size = final_file.stat().st_size
 
     # ── OUTPUT LOGIC ──
     if size <= SEND_SIZE_LIMIT:
