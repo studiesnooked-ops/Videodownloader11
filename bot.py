@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Telegram Video Extractor Bot (Polling + Render Web Service compatible)
+Telegram Video Extractor Bot (PRO Render Web Service Mode)
+Stable + crash-safe + production-ready
 """
 
 import os
@@ -17,7 +18,7 @@ from telegram.ext import (
     filters,
 )
 
-# ── Your handlers ─────────────────────────────────────────────
+# ── Handlers ─────────────────────────────────────────────
 from handlers.file_handler import handle_txt_file
 from handlers.command_handler import (
     start_command,
@@ -29,29 +30,34 @@ from handlers.callback_handler import handle_callback
 
 from utils.logger import setup_logger
 from utils.queue_manager import QueueManager
-
-# 🔥 ADD HEALTH SERVER IMPORT
 from utils.health_server import run_health_server
 
 
-# ── Config ────────────────────────────────────────────────────
+# ── CONFIG ───────────────────────────────────────────────
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
-MAX_WORKERS = int(os.environ.get("MAX_WORKERS", 4))
+MAX_WORKERS = int(os.environ.get("MAX_WORKERS", 3))
+PORT = int(os.environ.get("PORT", 10000))
 
 logger = setup_logger("bot", "logs/bot.log")
 
 
-# ── ENV CHECK ────────────────────────────────────────────────
+# ── ENV CHECK ────────────────────────────────────────────
 def validate_env():
     if not BOT_TOKEN:
-        logger.critical("BOT_TOKEN is missing!")
+        logger.critical("BOT_TOKEN missing!")
         sys.exit(1)
 
 
-# ── Lifecycle hooks ───────────────────────────────────────────
+# ── LIFECYCLE ─────────────────────────────────────────────
 async def post_init(application: Application):
-    application.bot_data["queue_manager"] = QueueManager(max_workers=MAX_WORKERS)
-    logger.info("QueueManager started with %d workers", MAX_WORKERS)
+    try:
+        application.bot_data["queue_manager"] = QueueManager(
+            max_workers=MAX_WORKERS,
+            max_user_jobs=2
+        )
+        logger.info("QueueManager started (%d workers)", MAX_WORKERS)
+    except Exception as e:
+        logger.error("QueueManager init failed: %s", e)
 
 
 async def post_shutdown(application: Application):
@@ -61,7 +67,7 @@ async def post_shutdown(application: Application):
     logger.info("Bot shutdown complete")
 
 
-# ── BUILD BOT ────────────────────────────────────────────────
+# ── BUILD APP ─────────────────────────────────────────────
 def build_application() -> Application:
     app = (
         Application.builder()
@@ -78,38 +84,49 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("status", status_command))
     app.add_handler(CommandHandler("cancel", cancel_command))
 
-    # File uploads
+    # Files
     app.add_handler(MessageHandler(filters.Document.TXT, handle_txt_file))
 
-    # Callback queries
+    # Callback buttons
     app.add_handler(handle_callback)
 
     return app
 
 
-# ── MAIN ──────────────────────────────────────────────────────
+# ── MAIN ────────────────────────────────────────────────
 def main():
     validate_env()
 
-    # Create folders
+    # Create required folders
     for folder in ("logs", "uploads", "downloads"):
         Path(folder).mkdir(exist_ok=True)
 
     application = build_application()
 
-    logger.info("Starting WEB SERVICE MODE (Polling + Health server)")
+    logger.info("🚀 Bot starting in WEB SERVICE MODE (Render)")
 
-    # 🔥 START HEALTH SERVER (REQUIRED FOR RENDER WEB SERVICE)
-    threading.Thread(
-        target=run_health_server,
-        daemon=True
-    ).start()
+    # ── HEALTH SERVER (REQUIRED FOR RENDER) ──
+    try:
+        threading.Thread(
+            target=run_health_server,
+            args=(PORT,),
+            daemon=True,
+            name="health-server"
+        ).start()
 
-    # Start Telegram bot
-    application.run_polling(
-        allowed_updates=Update.ALL_TYPES,
-        drop_pending_updates=True,
-    )
+        logger.info("Health server started on port %s", PORT)
+
+    except Exception as e:
+        logger.error("Health server failed: %s", e)
+
+    # ── START BOT ──
+    try:
+        application.run_polling(
+            allowed_updates=Update.ALL_TYPES,
+            drop_pending_updates=True,
+        )
+    except Exception as e:
+        logger.critical("Bot crashed: %s", e)
 
 
 if __name__ == "__main__":
