@@ -235,15 +235,58 @@ cmd = get_ffmpeg_cmd(
 size = final_file.stat().st_size
 
     # ── OUTPUT LOGIC ──
-    if size <= SEND_SIZE_LIMIT:
-    try:
+    # ── OUTPUT ──
+
+try:
+
+    # MP4 files
+    if str(final_file).lower().endswith(".mp4") and size <= SEND_SIZE_LIMIT:
+
+        with open(final_file, "rb") as f:
+            await bot.send_video(
+                chat_id=chat_id,
+                video=f,
+                caption=f"🎬 {filename}",
+                supports_streaming=True
+            )
+
+        await msg.delete()
+
+    # MKV / PDF / BIG FILES
+    elif size <= SEND_SIZE_LIMIT:
+
         with open(final_file, "rb") as f:
             await bot.send_document(
                 chat_id=chat_id,
                 document=f,
                 filename=filename,
-                caption=f"🎬 {filename}"
+                caption=f"📦 {filename}"
             )
+
+        await msg.delete()
+
+    # TOO LARGE FOR TELEGRAM
+    else:
+
+        file_url = (
+            f"{os.environ.get('RENDER_EXTERNAL_URL')}"
+            f"/file/{final_file.name}"
+        )
+
+        await msg.edit_text(
+            "📦 Large file ready\n\n"
+            f"📁 File: {filename}\n"
+            f"📏 Size: {size/1024/1024:.2f} MB\n\n"
+            f"🔗 Download:\n{file_url}"
+        )
+
+except Exception as e:
+
+    logger.exception("Send failed")
+
+    await msg.edit_text(
+        f"⚠️ Upload failed:\n{str(e)}"
+    )
 
         await msg.delete()
 
