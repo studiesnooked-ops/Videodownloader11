@@ -170,11 +170,14 @@ async def _process(bot, chat_id, session, idx, url, total):
 
     # ── FFmpeg PROCESSING ──
     try:
-        cmd = get_ffmpeg_cmd(
-            str(raw_file),
-            str(final_file),
-            fast_mode=True
-        )
+        # FORCE MKV OUTPUT FOR LARGE FILES
+output_name = str(final_file).replace(".mp4", ".mkv")
+
+cmd = get_ffmpeg_cmd(
+    str(raw_file),
+    output_name,
+    fast_mode=True
+)
 
         await run_ffmpeg(cmd)
 
