@@ -1,43 +1,51 @@
 """
-Simple file server for large video delivery (Render-safe).
-Used when Telegram limit is exceeded.
+Simple file server for downloaded videos and PDF notes.
+Used for files too large to send via Telegram.
 """
 
-from http.server import BaseHTTPRequestHandler, HTTPServer
 import os
 import logging
+from pathlib import Path
+from http.server import SimpleHTTPRequestHandler
+from socketserver import TCPServer
 
 logger = logging.getLogger("bot.file_server")
 
-FILES_DIR = "downloads"
+DOWNLOAD_DIR = Path("downloads")
+DOWNLOAD_DIR.mkdir(exist_ok=True)
 
 
-class FileHandler(BaseHTTPRequestHandler):
+class FileHandler(SimpleHTTPRequestHandler):
 
-    def do_GET(self):
-        try:
-            filename = self.path.replace("/file/", "")
-            file_path = os.path.join(FILES_DIR, filename)
+    def translate_path(self, path):
+        path = path.lstrip("/")
 
-            if not os.path.exists(file_path):
-                self.send_response(404)
-                self.end_headers()
-                return
+        if path.startswith("file/"):
+            filename = path.replace("file/", "", 1)
+            return str(DOWNLOAD_DIR / filename)
 
-            self.send_response(200)
-            self.send_header("Content-Type", "application/octet-stream")
-            self.end_headers()
+        return str(DOWNLOAD_DIR)
 
-            with open(file_path, "rb") as f:
-                self.wfile.write(f.read())
+    def end_headers(self):
+        self.send_header("Access-Control-Allow-Origin", "*")
+        super().end_headers()
 
-        except Exception as e:
-            logger.error("File server error: %s", e)
-            self.send_response(500)
-            self.end_headers()
+    def log_message(self, format, *args):
+        pass
 
 
 def run_file_server(port: int = 8000):
-    server = HTTPServer(("0.0.0.0", port), FileHandler)
-    logger.info("File server running on port %d", port)
-    server.serve_forever()
+
+    try:
+        with TCPServer(("0.0.0.0", port), FileHandler) as server:
+            logger.info(
+                "File server running on http://0.0.0.0:%d",
+                port
+            )
+            server.serve_forever()
+
+    except Exception as e:
+        logger.exception(
+            "File server crashed: %s",
+            e
+        )
