@@ -1,38 +1,35 @@
 """
-PRO File Handler
-Supports:
-- Videos (.mp4 .mkv .m3u8)
-- PDF Notes
-- Course Thumbnails
-- Download Queue System
+PRO File Handler (RENDER SAFE FULL VERSION)
+Handles:
+- Video URLs (.mp4, .mkv, .m3u8)
+- PDF URLs (safe placeholder support)
+- Image URLs
+- Large TXT parsing
+- Queue integration ready
 """
 
 import logging
+import re
 from pathlib import Path
 
-from telegram import (
-    Update,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-)
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
-from utils.url_parser import parse_content
+from utils.url_parser import parse_video_urls
 from utils.file_utils import cleanup_file
 
 logger = logging.getLogger("bot.file_handler")
 
-# TXT upload size
-MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB
-
-# URLs inside txt
+# ───────────────────────── CONFIG ─────────────────────────
+MAX_FILE_SIZE = 50 * 1024 * 1024   # 50MB TXT limit
 MAX_URLS = 2000
 
+UPLOAD_DIR = Path("uploads")
+UPLOAD_DIR.mkdir(exist_ok=True)
 
-async def handle_txt_file(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-) -> None:
+
+# ───────────────────────── MAIN HANDLER ─────────────────────────
+async def handle_txt_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     doc = update.message.document
     user = update.effective_user
@@ -40,122 +37,80 @@ async def handle_txt_file(
     if not doc:
         return
 
-    # --------------------------------------------------
-    # FILE SIZE CHECK
-    # --------------------------------------------------
-
+    # ───────────────── FILE SIZE CHECK ─────────────────
     if doc.file_size and doc.file_size > MAX_FILE_SIZE:
-
         await update.message.reply_text(
             f"❌ TXT file too large.\n\n"
-            f"Limit: {MAX_FILE_SIZE // (1024 * 1024)} MB"
+            f"Max allowed: {MAX_FILE_SIZE // (1024 * 1024)} MB"
         )
         return
 
-    status = await update.message.reply_text(
-        "📂 Reading TXT file..."
-    )
+    status = await update.message.reply_text("📂 Processing your TXT file...")
 
     upload_path = None
 
     try:
-
-        # --------------------------------------------------
-        # DOWNLOAD TXT
-        # --------------------------------------------------
-
+        # ───────────────── DOWNLOAD FILE ─────────────────
         tg_file = await context.bot.get_file(doc.file_id)
 
-        upload_path = (
-            Path("uploads")
-            / f"{user.id}_{doc.file_name}"
-        )
+        safe_name = re.sub(r"[^\w\.-]", "_", doc.file_name or "file.txt")
+        upload_path = UPLOAD_DIR / f"{user.id}_{safe_name}"
 
-        await tg_file.download_to_drive(
-            str(upload_path)
-        )
+        await tg_file.download_to_drive(str(upload_path))
 
-        with open(
-            upload_path,
-            "r",
-            encoding="utf-8",
-            errors="ignore"
-        ) as f:
-
+        # ───────────────── READ FILE ─────────────────
+        with open(upload_path, "r", encoding="utf-8", errors="ignore") as f:
             text = f.read()
 
         cleanup_file(upload_path)
 
-        # --------------------------------------------------
-        # PARSE CONTENT
-        # --------------------------------------------------
+        # ───────────────── PARSE VIDEO URLS ─────────────────
+        all_urls = parse_video_urls(text)
 
-        parsed = parse_content(text)
+        # ───────────────── SEPARATE TYPES ─────────────────
+        videos = []
+        pdfs = []
+        images = []
 
-        videos = parsed["videos"]
-        pdfs = parsed["pdfs"]
-        images = parsed["images"]
+        for url in all_urls:
+            u = url.lower()
 
-        total_items = (
-            len(videos)
-            + len(pdfs)
-            + len(images)
-        )
+            if ".pdf" in u:
+                pdfs.append(url)
+            elif any(x in u for x in [".jpg", ".jpeg", ".png", ".webp"]):
+                images.append(url)
+            else:
+                videos.append(url)
 
-        if total_items == 0:
+        # ───────────────── LIMIT SAFETY ─────────────────
+        videos = videos[:MAX_URLS]
+        pdfs = pdfs[:MAX_URLS]
+        images = images[:MAX_URLS]
 
+        total = len(videos) + len(pdfs) + len(images)
+
+        if total == 0:
             await status.edit_text(
-                "❌ No supported URLs found.\n\n"
+                "❌ No supported content found.\n\n"
                 "Supported:\n"
-                "• MP4\n"
-                "• MKV\n"
-                "• M3U8\n"
+                "• MP4 / MKV / M3U8\n"
                 "• PDF\n"
                 "• JPG / PNG"
             )
-
             return
 
-        # --------------------------------------------------
-        # LIMITS
-        # --------------------------------------------------
+        # ───────────────── SAVE SESSION ─────────────────
+        context.bot_data[f"videos_{user.id}"] = videos
+        context.bot_data[f"pdfs_{user.id}"] = pdfs
+        context.bot_data[f"images_{user.id}"] = images
 
-        if len(videos) > MAX_URLS:
-            videos = videos[:MAX_URLS]
+        # ───────────────── PREVIEW ─────────────────
+        preview = "\n".join(
+            f"`{i+1}.` {u[:55]}"
+            for i, u in enumerate(videos[:5])
+        )
 
-        # --------------------------------------------------
-        # SAVE DATA
-        # --------------------------------------------------
-
-        context.bot_data[
-            f"videos_{user.id}"
-        ] = videos
-
-        context.bot_data[
-            f"pdfs_{user.id}"
-        ] = pdfs
-
-        context.bot_data[
-            f"images_{user.id}"
-        ] = images
-
-        # --------------------------------------------------
-        # PREVIEW
-        # --------------------------------------------------
-
-        preview = []
-
-        for i, url in enumerate(videos[:5], start=1):
-            preview.append(
-                f"`{i}.` {_truncate(url, 55)}"
-            )
-
-        preview_text = "\n".join(preview)
-
-        # --------------------------------------------------
-        # BUTTONS
-        # --------------------------------------------------
-
+        # ───────────────── BUTTON UI ─────────────────
         keyboard = InlineKeyboardMarkup([
 
             [
@@ -167,22 +122,20 @@ async def handle_txt_file(
 
             [
                 InlineKeyboardButton(
-                    f"📄 Notes ({len(pdfs)})",
+                    f"📄 PDFs ({len(pdfs)})",
                     callback_data=f"pdfs_{user.id}"
                 ),
-
                 InlineKeyboardButton(
-                    f"🖼 Thumbnails ({len(images)})",
+                    f"🖼 Images ({len(images)})",
                     callback_data=f"thumbs_{user.id}"
                 )
             ],
 
             [
                 InlineKeyboardButton(
-                    "📋 List URLs",
+                    "📋 List All",
                     callback_data=f"list_{user.id}"
                 ),
-
                 InlineKeyboardButton(
                     "🔢 Pick Videos",
                     callback_data=f"pick_{user.id}"
@@ -197,52 +150,25 @@ async def handle_txt_file(
             ]
         ])
 
-        # --------------------------------------------------
-        # RESULT
-        # --------------------------------------------------
-
+        # ───────────────── FINAL RESPONSE ─────────────────
         await status.edit_text(
             f"✅ TXT Parsed Successfully\n\n"
-
             f"🎬 Videos : {len(videos)}\n"
             f"📄 PDFs   : {len(pdfs)}\n"
             f"🖼 Images : {len(images)}\n\n"
-
-            f"{preview_text}\n\n"
-
-            f"Choose an action below.",
+            f"{preview}\n\n"
+            "Choose an action below:",
             parse_mode="Markdown",
             reply_markup=keyboard
         )
 
     except Exception as e:
-
-        logger.exception(
-            "TXT processing failed: %s",
-            e
-        )
-
-        await status.edit_text(
-            f"❌ Error:\n`{e}`",
-            parse_mode="Markdown"
-        )
+        logger.exception("TXT processing failed")
+        await status.edit_text(f"❌ Error:\n`{e}`", parse_mode="Markdown")
 
     finally:
-
         if upload_path and upload_path.exists():
-
             try:
                 cleanup_file(upload_path)
             except Exception:
                 pass
-
-
-def _truncate(
-    text: str,
-    max_len: int = 60
-) -> str:
-
-    if len(text) <= max_len:
-        return text
-
-    return text[:max_len - 3] + "..."
