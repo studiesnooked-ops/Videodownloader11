@@ -63,6 +63,7 @@ async def _download_one(session, url, dest_path, progress_cb=None):
 
                 total = int(resp.headers.get("Content-Length", 0))
 
+                # block huge files early
                 if total and total > MAX_FILE_SIZE:
                     logger.warning("File >1GB skipped")
                     return False
@@ -154,8 +155,7 @@ async def _process(bot, chat_id, session, idx, url, total):
         await msg.edit_text(f"🎬 {idx}/{total}\nProcessing HLS stream...")
 
         cmd = [
-            "ffmpeg",
-            "-y",
+            "ffmpeg", "-y",
             "-i", url,
             "-c", "copy",
             "-bsf:a", "aac_adtstoasc",
@@ -185,14 +185,13 @@ async def _process(bot, chat_id, session, idx, url, total):
             await msg.edit_text("❌ FFmpeg processing failed")
             return
 
-    # ───────────── FORCE MKV FOR BIG FILES ─────────────
+    # ───────────── FORCE MKV CONVERSION ─────────────
     mkv_file = final_file.with_suffix(".mkv")
 
     if final_file.suffix != ".mkv":
         try:
             cmd = [
-                "ffmpeg",
-                "-y",
+                "ffmpeg", "-y",
                 "-i", str(final_file),
                 "-c", "copy",
                 str(mkv_file)
