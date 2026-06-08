@@ -1,107 +1,209 @@
-"""Telegram command handlers: /start /help /status /cancel"""
+"""
+Command handlers for Telegram Video Extractor Bot.
+PRO Version
+"""
 
 import logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update
 from telegram.ext import ContextTypes
 
 logger = logging.getLogger("bot.commands")
 
-WELCOME_TEXT = """
-🎬 *Video Extractor Bot*
-
-Hello, {name}! I can extract MP4 video links from `.txt` files and let you download them in bulk.
-
-*How to use:*
-1️⃣ Send me a `.txt` file containing video URLs (one per line)
-2️⃣ I'll scan it for all MP4 / video links
-3️⃣ Choose to download all, pick specific ones, or just get a clean list
-
-*Supported URL formats:*
-• Direct `.mp4` links
-• URLs containing `video`, `media`, `stream`
-• CDN URLs (e.g. cloudfront, akamai, etc.)
-
-Type /help for more info.
-"""
 
 HELP_TEXT = """
-📖 *Help & Commands*
+📖 PRO VIDEO EXTRACTOR BOT
 
-`/start`  – Welcome message
-`/help`   – This help text
-`/status` – Show current queue status
-`/cancel` – Cancel your active job
+━━━━━━━━━━━━━━━━━━
+AVAILABLE COMMANDS
+━━━━━━━━━━━━━━━━━━
 
-*File format tips:*
-• One URL per line
-• Lines starting with `#` are treated as comments
-• Blank lines are ignored
-• Supports HTTP and HTTPS links
+/start
+/help
+/status
+/cancel
 
-*Limits:*
-• Max file size: 1 GB
-Max URLs per file: 1100
-Supported formats:
-• MP4
-• MKV
-• M3U8 streams
-• PDF notes
-• Max URLs per file: 1100
-• Concurrent downloads per user: 3
+━━━━━━━━━━━━━━━━━━
+SUPPORTED INPUT
+━━━━━━━━━━━━━━━━━━
 
-*Output:*
-• Bot sends each video file directly in chat (≤800 MB)
-• Larger files: you get a direct download link message
+✅ MP4
+✅ MKV
+✅ M3U8
+✅ HLS Streams
+✅ TXT Course Dumps
+✅ PDF Notes
+
+━━━━━━━━━━━━━━━━━━
+TXT FORMAT
+━━━━━━━━━━━━━━━━━━
+
+Course Video:
+https://example.com/video.m3u8
+
+Course Notes:
+https://example.com/notes.pdf
+
+━━━━━━━━━━━━━━━━━━
+LIMITS
+━━━━━━━━━━━━━━━━━━
+
+📄 TXT Size:
+100 MB
+
+🎥 Video Size:
+1 GB
+
+📚 Notes:
+PDF Supported
+
+⚡ Concurrent Jobs:
+2 per User
+
+━━━━━━━━━━━━━━━━━━
+OUTPUT
+━━━━━━━━━━━━━━━━━━
+
+≤ 50MB
+→ Sent directly to Telegram
+
+> 50MB
+→ Download link generated
+
+━━━━━━━━━━━━━━━━━━
+FEATURES
+━━━━━━━━━━━━━━━━━━
+
+✅ MP4 Download
+
+✅ MKV Download
+
+✅ M3U8 Extraction
+
+✅ PDF Notes Download
+
+✅ Auto Retry
+
+✅ Progress Bar
+
+✅ Queue System
+
+✅ Stuck Job Recovery
+
+✅ Crash Protection
+
+✅ Render Optimized
+
+━━━━━━━━━━━━━━━━━━
 """
 
 
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user = update.effective_user
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📖 Help", callback_data="help"),
-         InlineKeyboardButton("📊 Status", callback_data="status")],
-    ])
+async def start_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    text = """
+🎬 PRO VIDEO EXTRACTOR BOT
+
+Send a TXT file containing:
+
+✅ MP4 Links
+
+✅ MKV Links
+
+✅ M3U8 Streams
+
+✅ PDF Notes
+
+━━━━━━━━━━━━━━━━━━
+
+The bot will:
+
+📥 Extract links
+
+📥 Download videos
+
+📥 Download notes
+
+📤 Send files or download links
+
+━━━━━━━━━━━━━━━━━━
+
+Maximum Video Size:
+1 GB
+
+Maximum URLs:
+500+
+
+━━━━━━━━━━━━━━━━━━
+
+Use /help for full details.
+"""
+
+    await update.message.reply_text(text)
+
+
+async def help_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
     await update.message.reply_text(
-        WELCOME_TEXT.format(name=user.first_name),
-        parse_mode="Markdown",
-        reply_markup=keyboard,
+        HELP_TEXT
     )
 
 
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text(HELP_TEXT, parse_mode="Markdown")
+async def status_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
 
-
-async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     qm = context.bot_data.get("queue_manager")
+
     if not qm:
-        await update.message.reply_text("⚠️ Queue manager not ready yet.")
+        await update.message.reply_text(
+            "⚠️ Queue Manager unavailable."
+        )
         return
 
-    user_id = update.effective_user.id
-    stats = qm.get_stats(user_id)
-    text = (
-        f"📊 *Queue Status*\n\n"
-        f"🌐 Global:\n"
-        f"  • Active jobs: `{stats['global_active']}`\n"
-        f"  • Queued jobs: `{stats['global_queued']}`\n"
-        f"  • Total workers: `{stats['max_workers']}`\n\n"
-        f"👤 Your jobs:\n"
-        f"  • Active: `{stats['user_active']}`\n"
-        f"  • Queued: `{stats['user_queued']}`\n"
-        f"  • Completed today: `{stats['user_completed']}`\n"
+    stats = qm.get_stats(
+        update.effective_user.id
     )
-    await update.message.reply_text(text, parse_mode="Markdown")
+
+    text = (
+        "📊 BOT STATUS\n\n"
+
+        f"🟢 Active Jobs: {stats['global_active']}\n"
+        f"🟡 Queued Jobs: {stats['global_queued']}\n\n"
+
+        f"👤 Your Active Jobs: {stats['user_active']}\n"
+        f"📥 Your Queued Jobs: {stats['user_queued']}\n"
+        f"✅ Completed Today: {stats['user_completed']}\n\n"
+
+        f"⚙ Workers: {stats['max_workers']}\n"
+        f"👤 Max/User: {stats.get('max_per_user', 2)}"
+    )
+
+    await update.message.reply_text(text)
 
 
-async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def cancel_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
     qm = context.bot_data.get("queue_manager")
-    user_id = update.effective_user.id
-    if qm:
-        cancelled = qm.cancel_user_jobs(user_id)
+
+    if not qm:
         await update.message.reply_text(
-            f"🛑 Cancelled `{cancelled}` job(s).",
-            parse_mode="Markdown",
+            "⚠️ Queue Manager unavailable."
         )
-    else:
-        await update.message.reply_text("Nothing to cancel.")
+        return
+
+    count = qm.cancel_user_jobs(
+        update.effective_user.id
+    )
+
+    await update.message.reply_text(
+        f"❌ Cancelled {count} job(s)."
+    )
