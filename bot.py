@@ -32,6 +32,7 @@ from handlers.callback_handler import handle_callback
 # ── CORE SYSTEM ──────────────────────────────────────────
 from utils.logger import setup_logger
 from utils.queue_manager import QueueManager
+from utils.file_server import run_file_server
 from utils.health_server import run_health_server
 
 # OPTIONAL FILE SERVER
