@@ -19,7 +19,7 @@ from telegram.ext import (
     filters,
 )
 
-# ── Handlers ─────────────────────────────────────────────
+# ── HANDLERS ─────────────────────────────────────────────
 from handlers.file_handler import handle_txt_file
 from handlers.command_handler import (
     start_command,
@@ -34,13 +34,6 @@ from utils.logger import setup_logger
 from utils.queue_manager import QueueManager
 from utils.file_server import run_file_server
 from utils.health_server import run_health_server
-
-# OPTIONAL FILE SERVER
-try:
-    from utils.file_server import run_file_server
-    FILE_SERVER_ENABLED = True
-except Exception:
-    FILE_SERVER_ENABLED = False
 
 
 # ── CONFIG ───────────────────────────────────────────────
@@ -60,10 +53,6 @@ def validate_env():
 
 # ── LIFECYCLE INIT ───────────────────────────────────────
 async def post_init(application: Application):
-    """
-    This runs once when bot starts.
-    We initialize QueueManager + background cleanup loop here.
-    """
 
     qm = QueueManager(
         max_workers=MAX_WORKERS,
@@ -72,20 +61,18 @@ async def post_init(application: Application):
     )
 
     application.bot_data["queue_manager"] = qm
-
     logger.info("QueueManager started (%d workers)", MAX_WORKERS)
 
-    # 🔥 CLEANUP LOOP (FIXED VERSION)
+    # ── CLEANUP LOOP (EVERY 5 MINUTES) ──
     async def cleanup_loop():
         while True:
             try:
-                await asyncio.sleep(300)  # every 5 minutes
+                await asyncio.sleep(300)
                 await qm.cleanup_stuck_jobs()
                 logger.info("Stuck job cleanup executed")
             except Exception as e:
                 logger.error("Cleanup loop error: %s", e)
 
-    # attach safe task to event loop
     asyncio.create_task(cleanup_loop())
 
 
@@ -97,7 +84,7 @@ async def post_shutdown(application: Application):
     logger.info("Bot shutdown complete")
 
 
-# ── BUILD APP ─────────────────────────────────────────────
+# ── BUILD APPLICATION ────────────────────────────────────
 def build_application() -> Application:
     app = (
         Application.builder()
@@ -114,10 +101,10 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("status", status_command))
     app.add_handler(CommandHandler("cancel", cancel_command))
 
-    # File uploads
+    # File upload handler
     app.add_handler(MessageHandler(filters.Document.TXT, handle_txt_file))
 
-    # Callback buttons
+    # Callback handler
     app.add_handler(handle_callback)
 
     return app
@@ -127,6 +114,7 @@ def build_application() -> Application:
 def main():
     validate_env()
 
+    # Create folders
     for folder in ("logs", "uploads", "downloads"):
         Path(folder).mkdir(exist_ok=True)
 
@@ -148,20 +136,19 @@ def main():
     except Exception as e:
         logger.error("Health server failed: %s", e)
 
-    # ── OPTIONAL FILE SERVER ──
-    if FILE_SERVER_ENABLED:
-        try:
-            threading.Thread(
-                target=run_file_server,
-                args=(8000,),
-                daemon=True,
-                name="file-server"
-            ).start()
+    # ── FILE SERVER ──
+    try:
+        threading.Thread(
+            target=run_file_server,
+            args=(8000,),
+            daemon=True,
+            name="file-server"
+        ).start()
 
-            logger.info("File server running on port 8000")
+        logger.info("File server running on port 8000")
 
-        except Exception as e:
-            logger.error("File server failed: %s", e)
+    except Exception as e:
+        logger.error("File server failed: %s", e)
 
     # ── START BOT ──
     try:
