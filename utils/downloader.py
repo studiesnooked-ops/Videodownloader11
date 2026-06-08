@@ -1,6 +1,6 @@
 """
-Async video downloader with FFmpeg speed optimization.
-Render-safe + 1GB support + cloud upload (S3/R2) + crash-proof pipeline.
+Async video downloader with FFmpeg optimization.
+PRO: MKV + MP4 + M3U8 + 1GB support + Cloud fallback + crash-safe pipeline
 """
 
 import asyncio
@@ -17,15 +17,15 @@ from telegram import Bot
 
 from utils.queue_manager import QueueManager
 from utils.ffmpeg import get_ffmpeg_cmd, run_ffmpeg
-from utils.cloud_storage import upload_to_s3   # ✅ STEP 5.3 ADD
+from utils.cloud_storage import upload_to_s3
 
 logger = logging.getLogger("bot.downloader")
 
-# ── STORAGE ─────────────────────────────
+# ───────────────── STORAGE ─────────────────
 DOWNLOAD_DIR = Path("downloads")
 DOWNLOAD_DIR.mkdir(exist_ok=True)
 
-# ── SETTINGS ─────────────────────────────
+# ───────────────── SETTINGS ─────────────────
 CHUNK_SIZE = 2 * 1024 * 1024
 SEND_SIZE_LIMIT = 50 * 1024 * 1024
 MAX_FILE_SIZE = 1024 * 1024 * 1024
@@ -41,8 +41,7 @@ HEADERS = {
 }
 
 
-# ───────────────────────── FILE NAME ─────────────────────────
-
+# ───────────────── FILE NAME ─────────────────
 def _guess_filename(url: str) -> str:
     path = unquote(urlparse(url).path)
     name = path.split("/")[-1]
@@ -55,8 +54,7 @@ def _guess_filename(url: str) -> str:
     return f"{int(time.time())}_{name}"
 
 
-# ───────────────────────── DOWNLOAD CORE ─────────────────────────
-
+# ───────────────── DOWNLOAD CORE ─────────────────
 async def _download_one(session, url, dest_path, progress_cb=None):
     for attempt in range(1, MAX_RETRIES + 1):
         try:
@@ -65,7 +63,6 @@ async def _download_one(session, url, dest_path, progress_cb=None):
 
                 total = int(resp.headers.get("Content-Length", 0))
 
-                # block huge files early
                 if total and total > MAX_FILE_SIZE:
                     logger.warning("File >1GB skipped")
                     return False
@@ -90,8 +87,7 @@ async def _download_one(session, url, dest_path, progress_cb=None):
     return False
 
 
-# ───────────────────────── MAIN PIPELINE ─────────────────────────
-
+# ───────────────── MAIN PIPELINE ─────────────────
 async def download_and_send_videos(
     bot: Bot,
     chat_id: int,
@@ -111,10 +107,7 @@ async def download_and_send_videos(
         total=READ_TIMEOUT
     )
 
-    async with aiohttp.ClientSession(
-        connector=connector,
-        timeout=timeout
-    ) as session:
+    async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
 
         sem = asyncio.Semaphore(2)
 
@@ -130,14 +123,10 @@ async def download_and_send_videos(
     await bot.send_message(chat_id, "✅ All videos processed successfully.")
 
 
-# ───────────────────────── PROCESS SINGLE ─────────────────────────
-
+# ───────────────── PROCESS SINGLE VIDEO ─────────────────
 async def _process(bot, chat_id, session, idx, url, total):
 
-    msg = await bot.send_message(
-        chat_id,
-        f"⬇️ {idx}/{total} Downloading..."
-    )
+    msg = await bot.send_message(chat_id, f"⬇️ {idx}/{total} Downloading...")
 
     filename = _guess_filename(url)
     raw_file = DOWNLOAD_DIR / f"raw_{filename}"
@@ -155,174 +144,106 @@ async def _process(bot, chat_id, session, idx, url, total):
         bar = "█" * int(pct / 10) + "░" * (10 - int(pct / 10))
 
         try:
-            await msg.edit_text(
-                f"⬇️ {idx}/{total}\n{bar} {pct:.0f}%"
-            )
+            await msg.edit_text(f"⬇️ {idx}/{total}\n{bar} {pct:.0f}%")
         except:
             pass
 
-    # ── DOWNLOAD ──
-    # Detect m3u8 streams
-if ".m3u8" in url.lower():
+    # ───────────── HANDLE M3U8 (HLS STREAM) ─────────────
+    if ".m3u8" in url.lower():
 
-    await msg.edit_text(
-        f"🎬 {idx}/{total}\nDetected HLS stream (.m3u8)\nStarting FFmpeg..."
-    )
+        await msg.edit_text(f"🎬 {idx}/{total}\nProcessing HLS stream...")
 
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-i", url,
-        "-c", "copy",
-        "-bsf:a", "aac_adtstoasc",
-        str(final_file)
-    ]
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-i", url,
+            "-c", "copy",
+            "-bsf:a", "aac_adtstoasc",
+            str(final_file)
+        ]
 
-    rc = await run_ffmpeg(cmd)
+        rc = await run_ffmpeg(cmd)
 
-    if rc != 0:
-        await msg.edit_text(
-            f"❌ FFmpeg failed for video {idx}/{total}"
-        )
-        return
+        if rc != 0:
+            await msg.edit_text(f"❌ FFmpeg failed {idx}/{total}")
+            return
 
-else:
-    success = await _download_one(
-        session,
-        url,
-        raw_file,
-        progress
-    )
-
-    if not success:
-        await msg.edit_text(
-            f"❌ Failed {idx}/{total}"
-        )
-        return
-
-    cmd = get_ffmpeg_cmd(
-        str(raw_file),
-        str(final_file),
-        fast_mode=True
-    )
-
-    rc = await run_ffmpeg(cmd)
-
-    if rc != 0:
-        await msg.edit_text(
-            f"❌ FFmpeg processing failed"
-        )
-        return
-
-    # ── FFmpeg PROCESSING ──
-    try:
-        # FORCE MKV OUTPUT FOR LARGE FILES
-output_name = str(final_file).replace(".mp4", ".mkv")
-
-cmd = get_ffmpeg_cmd(
-    str(raw_file),
-    output_name,
-    fast_mode=True
-)
-
-        await run_ffmpeg(cmd)
-
-    except Exception as e:
-        await msg.edit_text(f"⚠️ FFmpeg error: {e}")
-        return
-
-    final_file = Path(output_name)
-size = final_file.stat().st_size
-
-    # ── OUTPUT LOGIC ──
-    # ── OUTPUT ──
-
-try:
-
-    # MP4 files
-    if str(final_file).lower().endswith(".mp4") and size <= SEND_SIZE_LIMIT:
-
-        with open(final_file, "rb") as f:
-            await bot.send_video(
-                chat_id=chat_id,
-                video=f,
-                caption=f"🎬 {filename}",
-                supports_streaming=True
-            )
-
-        await msg.delete()
-
-    # MKV / PDF / BIG FILES
-    elif size <= SEND_SIZE_LIMIT:
-
-        with open(final_file, "rb") as f:
-            await bot.send_document(
-                chat_id=chat_id,
-                document=f,
-                filename=filename,
-                caption=f"📦 {filename}"
-            )
-
-        await msg.delete()
-
-    # TOO LARGE FOR TELEGRAM
+    # ───────────── NORMAL DOWNLOAD ─────────────
     else:
 
-        file_url = (
-            f"{os.environ.get('RENDER_EXTERNAL_URL')}"
-            f"/file/{final_file.name}"
-        )
+        success = await _download_one(session, url, raw_file, progress)
 
-        await msg.edit_text(
-            "📦 Large file ready\n\n"
-            f"📁 File: {filename}\n"
-            f"📏 Size: {size/1024/1024:.2f} MB\n\n"
-            f"🔗 Download:\n{file_url}"
-        )
+        if not success:
+            await msg.edit_text(f"❌ Failed {idx}/{total}")
+            return
 
-except Exception as e:
+        cmd = get_ffmpeg_cmd(str(raw_file), str(final_file), fast_mode=True)
 
-    logger.exception("Send failed")
+        rc = await run_ffmpeg(cmd)
 
-    await msg.edit_text(
-        f"⚠️ Upload failed:\n{str(e)}"
-    )
+        if rc != 0:
+            await msg.edit_text("❌ FFmpeg processing failed")
+            return
 
-        await msg.delete()
+    # ───────────── FORCE MKV FOR BIG FILES ─────────────
+    mkv_file = final_file.with_suffix(".mkv")
 
-    except Exception as e:
-        await msg.edit_text(
-            f"⚠️ Send error: {e}"
-        )
+    if final_file.suffix != ".mkv":
+        try:
+            cmd = [
+                "ffmpeg",
+                "-y",
+                "-i", str(final_file),
+                "-c", "copy",
+                str(mkv_file)
+            ]
+            await run_ffmpeg(cmd)
+            final_file = mkv_file
+        except Exception as e:
+            logger.warning("MKV convert failed: %s", e)
+
+    size = final_file.stat().st_size
+
+    # ───────────── SEND TO TELEGRAM ─────────────
+    try:
+
+        if size <= SEND_SIZE_LIMIT:
+
+            with open(final_file, "rb") as f:
+                await bot.send_document(
+                    chat_id=chat_id,
+                    document=f,
+                    caption=f"🎬 {filename}"
+                )
+
             await msg.delete()
 
-        except Exception as e:
-            await msg.edit_text(f"⚠️ Send error: {e}")
+        else:
+            # ───────────── CLOUD FALLBACK ─────────────
+            try:
+                file_url = await upload_to_s3(str(final_file), filename)
 
-    else:
-        # ── STEP 5.3 CLOUD UPLOAD ──
-        try:
-            file_url = await upload_to_s3(str(final_file), filename)
+                await msg.edit_text(
+                    "📦 Large file uploaded\n\n"
+                    f"📁 {filename}\n"
+                    f"📏 {size/1024/1024:.2f} MB\n\n"
+                    f"☁️ {file_url}"
+                )
 
-            if not file_url:
-                raise Exception("Upload failed")
+            except Exception as e:
+                logger.error("Cloud upload failed: %s", e)
+                await msg.edit_text(
+                    f"❌ File too large and upload failed\nSize: {size/1024/1024:.2f} MB"
+                )
 
-            await msg.edit_text(
-                "📦 File too large for Telegram\n\n"
-                f"Size: {size/1024/1024:.2f} MB\n"
-                f"☁️ Download link:\n{file_url}"
-            )
+    except Exception as e:
+        logger.exception("Send error")
+        await msg.edit_text(f"⚠️ Send failed: {e}")
 
-        except Exception as e:
-            logger.error("Cloud upload error: %s", e)
-            await msg.edit_text(
-                "❌ File too large AND upload failed\n"
-                f"Size: {size/1024/1024:.2f} MB"
-            )
-
-    # ── CLEANUP ──
+    # ───────────── CLEANUP ─────────────
     try:
         raw_file.unlink(missing_ok=True)
         final_file.unlink(missing_ok=True)
+        mkv_file.unlink(missing_ok=True)
     except Exception as e:
-        logger.warning("Cleanup failed: %s", e)
+        logger.warning("Cleanup error: %s", e)
