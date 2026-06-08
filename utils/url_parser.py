@@ -1,83 +1,170 @@
 """
-Parses raw text and extracts video/MP4 URLs.
-Handles a wide variety of URL patterns.
+Advanced URL parser
+Supports:
+- Video URLs
+- M3U8 streams
+- PDF Notes
+- Images / Thumbnails
 """
 
 import re
 from urllib.parse import urlparse
-from typing import List
+from typing import List, Dict
 
-# ── Patterns ──────────────────────────────────────────────────────────────────
+# --------------------------------------------------
+# URL REGEX
+# --------------------------------------------------
+
 _URL_RE = re.compile(
-    r"https?://"                      # scheme
-    r"[a-zA-Z0-9\-._~:/?#\[\]@!$&'()*+,;=%]+"  # rest of URL
-,
+    r"https?://[a-zA-Z0-9\-._~:/?#\[\]@!$&'()*+,;=%]+",
     re.IGNORECASE,
 )
 
-# Keywords that indicate a video URL even without .mp4 extension
-_VIDEO_KEYWORDS = re.compile(
-    r"\.(mp4|m4v|mov|avi|mkv|webm|flv|wmv|mpeg|mpg|ts|m3u8)(\?|$|#)",
-    re.IGNORECASE,
-)
-_VIDEO_PATH_HINTS = re.compile(
-    r"/(video|videos|media|stream|clip|play|content|vod|hls|dash)/",
-    re.IGNORECASE,
-)
-_CDN_DOMAINS = re.compile(
-    r"\.(cloudfront\.net|akamaihd\.net|fastly\.net|cdnvideo|fbcdn|twimg|"
-    r"googlevideo|ytimg|vimeocdn|wistia|bunnycdn|b-cdn\.net)",
+# --------------------------------------------------
+# VIDEO PATTERNS
+# --------------------------------------------------
+
+_VIDEO_EXTENSIONS = re.compile(
+    r"\.(mp4|mkv|avi|mov|m4v|webm|flv|wmv|mpeg|mpg|ts|m3u8)(\?|$|#)",
     re.IGNORECASE,
 )
 
+# --------------------------------------------------
+# PDF NOTES
+# --------------------------------------------------
+
+_PDF_EXTENSIONS = re.compile(
+    r"\.(pdf)(\?|$|#)",
+    re.IGNORECASE,
+)
+
+# --------------------------------------------------
+# THUMBNAILS
+# --------------------------------------------------
+
+_IMAGE_EXTENSIONS = re.compile(
+    r"\.(jpg|jpeg|png|webp)(\?|$|#)",
+    re.IGNORECASE,
+)
+
+# --------------------------------------------------
+# VIDEO DETECTION
+# --------------------------------------------------
 
 def is_video_url(url: str) -> bool:
-    """Return True if url looks like a video resource."""
-    lower = url.lower()
     parsed = urlparse(url)
+
     path = parsed.path.lower()
+    query = parsed.query.lower()
 
-    if _VIDEO_KEYWORDS.search(path + "?" + (parsed.query or "")):
-        return True
-    if _VIDEO_PATH_HINTS.search(path):
-        return True
-    if _CDN_DOMAINS.search(parsed.netloc):
-        return True
-    return False
+    combined = path + "?" + query
+
+    return bool(_VIDEO_EXTENSIONS.search(combined))
 
 
-def parse_video_urls(text: str) -> List[str]:
-    """
-    Extract unique video URLs from arbitrary text.
-    Lines starting with '#' are treated as comments.
-    """
-    seen: set = set()
-    results: List[str] = []
+# --------------------------------------------------
+# PDF DETECTION
+# --------------------------------------------------
+
+def is_pdf_url(url: str) -> bool:
+    parsed = urlparse(url)
+
+    path = parsed.path.lower()
+    query = parsed.query.lower()
+
+    combined = path + "?" + query
+
+    return bool(_PDF_EXTENSIONS.search(combined))
+
+
+# --------------------------------------------------
+# IMAGE DETECTION
+# --------------------------------------------------
+
+def is_image_url(url: str) -> bool:
+    parsed = urlparse(url)
+
+    path = parsed.path.lower()
+    query = parsed.query.lower()
+
+    combined = path + "?" + query
+
+    return bool(_IMAGE_EXTENSIONS.search(combined))
+
+
+# --------------------------------------------------
+# MAIN PARSER
+# --------------------------------------------------
+
+def parse_content(text: str) -> Dict[str, List[str]]:
+
+    videos = []
+    pdfs = []
+    images = []
+
+    seen = set()
 
     for line in text.splitlines():
+
         line = line.strip()
-        if not line or line.startswith("#"):
+
+        if not line:
             continue
 
-        for match in _URL_RE.findall(line):
-            url = match.rstrip(".,;)'\"")   # strip common trailing punctuation
+        if line.startswith("#"):
+            continue
+
+        matches = _URL_RE.findall(line)
+
+        for url in matches:
+
+            url = url.rstrip(".,;)'\"")
+
             if url in seen:
                 continue
+
+            seen.add(url)
+
             if is_video_url(url):
-                seen.add(url)
-                results.append(url)
+                videos.append(url)
 
-    return results
+            elif is_pdf_url(url):
+                pdfs.append(url)
 
+            elif is_image_url(url):
+                images.append(url)
+
+    return {
+        "videos": videos,
+        "pdfs": pdfs,
+        "images": images,
+    }
+
+
+# --------------------------------------------------
+# OLD COMPATIBILITY FUNCTION
+# --------------------------------------------------
+
+def parse_video_urls(text: str) -> List[str]:
+    return parse_content(text)["videos"]
+
+
+# --------------------------------------------------
+# FORMATTER
+# --------------------------------------------------
 
 def format_url_list(urls: List[str]) -> str:
-    """Format a list of URLs as a numbered Markdown list."""
+
     lines = []
+
     for i, url in enumerate(urls, start=1):
+
         try:
             parsed = urlparse(url)
             name = parsed.path.split("/")[-1] or url
         except Exception:
             name = url
-        lines.append(f"`{i:>3}.` [{name}]({url})")
+
+        lines.append(f"{i}. {name}")
+
     return "\n".join(lines)
