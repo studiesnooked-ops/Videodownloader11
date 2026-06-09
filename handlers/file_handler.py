@@ -48,7 +48,6 @@ async def fetch_video_url(session, api_url):
         async with session.get(api_url, headers=HEADERS) as response:
             data = await response.json()
             
-            # Try different possible keys
             video_url = (
                 data.get("video_url") or 
                 data.get("url") or 
