@@ -24,16 +24,76 @@ def get_name(url: str) -> str:
     return f"{int(time.time())}_{name}"
 
 
+# ---------------------------------------------------
+# JSON / APPX RESOLVER
+# ---------------------------------------------------
+
+async def resolve_stream_url(session, url):
+
+    if "appxapi.vercel.app/json/" not in url:
+        return url
+
+    async with session.get(url, headers=HEADERS) as resp:
+
+        resp.raise_for_status()
+
+        try:
+            data = await resp.json()
+        except Exception:
+            text = await resp.text()
+
+            try:
+                data = json.loads(text)
+            except Exception:
+                return url
+
+    candidates = [
+        "url",
+        "video_url",
+        "stream_url",
+        "master_m3u8",
+        "m3u8",
+        "playlist",
+    ]
+
+    for key in candidates:
+
+        value = data.get(key)
+
+        if isinstance(value, str) and value.startswith("http"):
+            return value
+
+    return url
+
+
+# ---------------------------------------------------
+# FILE DOWNLOAD
+# ---------------------------------------------------
+
 async def download_file(session, url, path):
-    async with session.get(url, headers=HEADERS) as response:
+
+    async with session.get(
+        url,
+        headers=HEADERS,
+        allow_redirects=True
+    ) as response:
+
         response.raise_for_status()
 
         with open(path, "wb") as f:
-            async for chunk in response.content.iter_chunked(1024 * 1024):
+
+            async for chunk in response.content.iter_chunked(
+                1024 * 1024
+            ):
                 f.write(chunk)
 
 
+# ---------------------------------------------------
+# M3U8 PROCESSOR
+# ---------------------------------------------------
+
 async def process_stream(url, out_path):
+
     cmd = [
         "ffmpeg",
         "-y",
@@ -49,45 +109,90 @@ async def process_stream(url, out_path):
     return await run_ffmpeg(cmd)
 
 
-async def send_file(bot, chat_id, path, is_video=False):
+# ---------------------------------------------------
+# SEND FILE
+# ---------------------------------------------------
+
+async def send_file(
+    bot,
+    chat_id,
+    path,
+    is_video=False
+):
+
     with open(path, "rb") as f:
 
         if is_video:
-            await bot.send_video(
-                chat_id=chat_id,
-                video=f,
-                supports_streaming=True,
-            )
-        else:
+
             await bot.send_document(
                 chat_id=chat_id,
                 document=f,
+                caption=path.name
+            )
+
+        else:
+
+            await bot.send_document(
+                chat_id=chat_id,
+                document=f
             )
 
 
-async def handle_course(bot, chat_id, links):
+# ---------------------------------------------------
+# MAIN COURSE HANDLER
+# ---------------------------------------------------
 
-    timeout = aiohttp.ClientTimeout(total=7200)
+async def handle_course(
+    bot,
+    chat_id,
+    links
+):
 
-    async with aiohttp.ClientSession(timeout=timeout) as session:
+    timeout = aiohttp.ClientTimeout(
+        total=7200
+    )
+
+    async with aiohttp.ClientSession(
+        timeout=timeout
+    ) as session:
 
         for url in links:
 
-            filename = get_name(url)
-            path = DOWNLOAD_DIR / filename
-
             try:
 
-                lower = url.lower()
+                real_url = await resolve_stream_url(
+                    session,
+                    url
+                )
+
+                lower = real_url.lower()
+
+                if any(
+                    x in lower
+                    for x in [".m3u8"]
+                ):
+
+                    filename = (
+                        f"{int(time.time())}.mp4"
+                    )
+
+                else:
+
+                    filename = get_name(
+                        real_url
+                    )
+
+                path = DOWNLOAD_DIR / filename
 
                 if ".m3u8" in lower:
 
                     rc = await process_stream(
-                        url,
+                        real_url,
                         str(path)
                     )
 
                     if rc != 0:
+
                         raise Exception(
                             f"FFmpeg exited with code {rc}"
                         )
@@ -96,14 +201,18 @@ async def handle_course(bot, chat_id, links):
 
                     await download_file(
                         session,
-                        url,
+                        real_url,
                         path
                     )
 
-                is_video = (
-                    ".mp4" in lower
-                    or ".mkv" in lower
-                    or ".m3u8" in lower
+                is_video = any(
+                    x in lower
+                    for x in [
+                        ".mp4",
+                        ".mkv",
+                        ".m3u8",
+                        ".ts"
+                    ]
                 )
 
                 await send_file(
@@ -117,7 +226,7 @@ async def handle_course(bot, chat_id, links):
 
                 await bot.send_message(
                     chat_id,
-                    f"❌ Failed:\n{url}\n\n{e}"
+                    f"❌ Failed\n\n{url}\n\n{e}"
                 )
 
             finally:
@@ -129,13 +238,21 @@ async def handle_course(bot, chat_id, links):
                     pass
 
 
+# ---------------------------------------------------
+# COMPATIBILITY FUNCTIONS
+# ---------------------------------------------------
+
 async def download_and_send_videos(
     bot,
     chat_id,
     urls,
     queue_manager=None,
 ):
-    await handle_course(bot, chat_id, urls)
+    await handle_course(
+        bot,
+        chat_id,
+        urls
+    )
 
 
 async def download_and_send_pdfs(
@@ -143,7 +260,11 @@ async def download_and_send_pdfs(
     chat_id,
     urls,
 ):
-    await handle_course(bot, chat_id, urls)
+    await handle_course(
+        bot,
+        chat_id,
+        urls
+    )
 
 
 async def download_and_send_images(
@@ -151,4 +272,8 @@ async def download_and_send_images(
     chat_id,
     urls,
 ):
-    await handle_course(bot, chat_id, urls)
+    await handle_course(
+        bot,
+        chat_id,
+        urls
+    )
