@@ -131,7 +131,7 @@ async def run_ffmpeg(cmd: list) -> int:
             logger.debug(stdout.decode(errors="ignore"))
 
         if process.returncode != 0:
-    print(stderr.decode(errors="ignore"))
+            print(stderr.decode(errors="ignore"))
             logger.error(
                 "FFmpeg failed (%s): %s",
                 process.returncode,
